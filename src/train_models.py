@@ -1,25 +1,21 @@
 """
 train_models.py
 ---------------
-Step 3: Train, evaluate (and optionally tune) three regressors:
-- Linear Regression
-- Random Forest Regressor
-- XGBoost Regressor
+Step 3: Train, evaluate, and tune two regression models:
+1. Random Forest Regressor (Traditional ML)
+2. MLP Regressor (Deep Learning)
 
 Inputs (from Step 2, in --results_dir):
 - X_train.npz / X_valid.npz / X_test.npz
 - y_train_log.npy / y_valid_log.npy / y_test_log.npy
-- y_train_raw.npy / y_valid_raw.npy / y_test_raw.npy
-- feature_names.json (for feature importances)
-- preprocessor.joblib (not directly used here but useful downstream)
+- feature_names.json (optional, for feature importances)
+- preprocessor.joblib (optional, for inference)
 
 Outputs:
 - results/metrics_comparison.csv
-- results/model_linear.joblib
 - results/model_rf.joblib
-- results/model_xgb.joblib
+- results/model_mlp.joblib
 - results/feature_importance_rf.csv
-- results/feature_importance_xgb.csv
 """
 
 import argparse
@@ -29,136 +25,106 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import joblib
 from scipy import sparse
+import joblib
 
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import RandomizedSearchCV, KFold
 
-# XGBoost
-from xgboost import XGBRegressor
-
-
 # ---------------------------
-# Utility helpers
+# Helper functions
 # ---------------------------
 
 def load_matrix(path: Path):
     """
-    Robust loader:
-    - If it's a sparse .npz, return CSR matrix
-    - If it's a dense .npy, return ndarray
-    - Tries .npz, then .npy if extensionless
+    Robust loader for both sparse (.npz) and dense (.npy) matrices.
     """
     path = Path(path)
     candidates = []
-
-    # if user passed a path with suffix, try that first
     if path.suffix:
         candidates.append(path)
-
-    # then try explicit .npz and .npy variants
     candidates.extend([path.with_suffix(".npz"), path.with_suffix(".npy")])
 
-    tried = []
     for p in candidates:
         if not p.exists():
-            tried.append(f"{p} (missing)")
             continue
-        # try sparse first
         try:
             return sparse.load_npz(p)
         except Exception:
-            # fall back to dense
             try:
                 return np.load(p, allow_pickle=False)
-            except Exception as e:
-                tried.append(f"{p} ({type(e).__name__}: {e})")
-                continue
-
-    raise FileNotFoundError(f"Could not load matrix. Tried: {', '.join(tried)}")
+            except Exception:
+                pass
+    raise FileNotFoundError(f"Could not load matrix for {path}")
 
 
-def to_dense_if_needed(X, for_model: str):
+def to_dense_if_needed(X, model_type="rf"):
     """
-    RandomForest cannot handle sparse matrices -> make dense.
-    Linear and XGB accept sparse CSR (fine to keep).
+    RandomForest and MLP require dense arrays.
     """
-    if for_model.lower() in {"rf", "randomforest"}:
-        if sparse.issparse(X):
-            return X.toarray()
+    if sparse.issparse(X):
+        return X.toarray()
     return X
 
 
 def eval_regression(y_true_log, y_pred_log):
     """
-    R2 in log-space; MAE/RMSE in raw price.
-    Compatible with old scikit-learn that lacks squared=.
+    Evaluate models on both log-space (R²) and raw prices (MAE/RMSE).
     """
-    # R² on log targets (stable variance metric)
     r2_log = r2_score(y_true_log, y_pred_log)
-
-    # Back-transform to raw prices
     y_true_raw = np.expm1(y_true_log)
     y_pred_raw = np.expm1(y_pred_log)
 
     mae = mean_absolute_error(y_true_raw, y_pred_raw)
-
-    # Try new API first; fall back to sqrt(MSE)
     try:
         rmse = mean_squared_error(y_true_raw, y_pred_raw, squared=False)
     except TypeError:
         rmse = np.sqrt(mean_squared_error(y_true_raw, y_pred_raw))
-
     return {"R2_log": r2_log, "MAE_raw": mae, "RMSE_raw": rmse}
 
 
 def save_feature_importance(model, feature_names, out_csv: Path):
     """
-    Save feature importances if available (RF/XGB).
+    Save feature importances for tree-based models.
     """
     if hasattr(model, "feature_importances_"):
-        importances = model.feature_importances_
-        df_imp = pd.DataFrame(
-            {"feature": feature_names, "importance": importances}
-        ).sort_values("importance", ascending=False)
-        df_imp.to_csv(out_csv, index=False)
-
+        imp = pd.DataFrame({
+            "feature": feature_names,
+            "importance": model.feature_importances_
+        }).sort_values("importance", ascending=False)
+        imp.to_csv(out_csv, index=False)
 
 # ---------------------------
 # Main
 # ---------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Train & evaluate baseline and tuned regressors.")
-    parser.add_argument("--results_dir", default="results", help="Directory that contains Step 2 artifacts and where outputs will be saved.")
-    parser.add_argument("--tune", action="store_true", help="Run hyperparameter tuning (RF & XGB) via RandomizedSearchCV.")
-    parser.add_argument("--cv_splits", type=int, default=5, help="CV splits for tuning.")
-    parser.add_argument("--n_iter", type=int, default=40, help="Number of parameter samples for random search.")
-    parser.add_argument("--n_jobs", type=int, default=-1, help="Parallel jobs for CV.")
+    parser = argparse.ArgumentParser(description="Train & evaluate RF and MLP regressors.")
+    parser.add_argument("--results_dir", default="results", help="Directory for input/output artifacts")
+    parser.add_argument("--tune", action="store_true", help="Enable hyperparameter tuning")
+    parser.add_argument("--cv_splits", type=int, default=5)
+    parser.add_argument("--n_iter", type=int, default=40)
+    parser.add_argument("--n_jobs", type=int, default=-1)
     parser.add_argument("--random_state", type=int, default=42)
     args = parser.parse_args()
 
     res = Path(args.results_dir)
     res.mkdir(parents=True, exist_ok=True)
 
-    # ---- Load data
-    X_train = load_matrix(res / "X_train.npz")
-    X_valid = load_matrix(res / "X_valid.npz")
-    X_test  = load_matrix(res / "X_test.npz")
+    # -----------------------
+    # Load data
+    # -----------------------
+    X_train = load_matrix(res / "X_train")
+    X_valid = load_matrix(res / "X_valid")
+    X_test = load_matrix(res / "X_test")
 
     y_train_log = np.load(res / "y_train_log.npy")
     y_valid_log = np.load(res / "y_valid_log.npy")
     y_test_log  = np.load(res / "y_test_log.npy")
 
-    # these are only for reference / optional checks
-    # y_train_raw = np.load(res / "y_train_raw.npy")
-    # y_valid_raw = np.load(res / "y_valid_raw.npy")
-    # y_test_raw  = np.load(res / "y_test_raw.npy")
-
-    # feature names (for importances)
+    # Load feature names (optional)
     feature_names = []
     fn_path = res / "feature_names.json"
     if fn_path.exists():
@@ -167,23 +133,9 @@ def main():
     metrics_rows = []
 
     # ======================================================
-    # 1) Linear Regression (baseline)
+    # 1) Random Forest (Traditional ML)
     # ======================================================
-    lin = LinearRegression(n_jobs=None)  # LinearRegression has no n_jobs param; keep default
-    lin.fit(X_train, y_train_log)
-    pred_val_lin = lin.predict(X_valid)
-    pred_tst_lin = lin.predict(X_test)
-
-    m_val = eval_regression(y_valid_log, pred_val_lin)
-    m_tst = eval_regression(y_test_log, pred_tst_lin)
-
-    joblib.dump(lin, res / "model_linear.joblib")
-    metrics_rows.append({"Model": "LinearRegression", "Split": "valid", **m_val})
-    metrics_rows.append({"Model": "LinearRegression", "Split": "test",  **m_tst})
-
-    # ======================================================
-    # 2) Random Forest
-    # ======================================================
+    print("Training Random Forest Regressor...")
     rf = RandomForestRegressor(
         n_estimators=400,
         max_depth=None,
@@ -196,6 +148,7 @@ def main():
     )
 
     rf.fit(to_dense_if_needed(X_train, "rf"), y_train_log)
+
     pred_val_rf = rf.predict(to_dense_if_needed(X_valid, "rf"))
     pred_tst_rf = rf.predict(to_dense_if_needed(X_test, "rf"))
 
@@ -210,158 +163,103 @@ def main():
         save_feature_importance(rf, feature_names, res / "feature_importance_rf.csv")
 
     # ======================================================
-    # 3) XGBoost (version-flexible)
+    # 2) MLP Regressor (Deep Learning)
     # ======================================================
-    from xgboost import XGBRegressor
-
-    xgb = XGBRegressor(
-        n_estimators=800,
-        learning_rate=0.05,
-        max_depth=6,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        reg_alpha=0.0,
-        reg_lambda=1.0,
-        objective="reg:squarederror",
+    print("Training MLP Regressor (Deep Learning)...")
+    mlp = MLPRegressor(
+        hidden_layer_sizes=(128, 64, 32),
+        activation="relu",
+        solver="adam",
+        alpha=0.001,
+        learning_rate="adaptive",
+        max_iter=300,
+        early_stopping=True,
         random_state=args.random_state,
-        n_jobs=args.n_jobs,
-        tree_method="hist",
-        # put eval_metric here for older XGB that doesn't accept it in fit()
-        eval_metric="rmse",
     )
 
-    # Try modern API first; fall back if older xgboost version
-    try:
-        xgb.fit(
-            X_train,
-            y_train_log,
-            eval_set=[(X_valid, y_valid_log)],
-            early_stopping_rounds=50,
-            verbose=False,
-        )
-    except TypeError:
-        # Very old versions: no early_stopping_rounds/verbose in fit
-        try:
-            xgb.fit(X_train, y_train_log, eval_set=[(X_valid, y_valid_log)])
-        except TypeError:
-            # Oldest: no eval_set either
-            xgb.fit(X_train, y_train_log)
+    mlp.fit(to_dense_if_needed(X_train, "mlp"), y_train_log)
 
-    pred_val_xgb = xgb.predict(X_valid)
-    pred_tst_xgb = xgb.predict(X_test)
+    pred_val_mlp = mlp.predict(to_dense_if_needed(X_valid, "mlp"))
+    pred_tst_mlp = mlp.predict(to_dense_if_needed(X_test, "mlp"))
 
-    m_val = eval_regression(y_valid_log, pred_val_xgb)
-    m_tst = eval_regression(y_test_log, pred_tst_xgb)
+    m_val = eval_regression(y_valid_log, pred_val_mlp)
+    m_tst = eval_regression(y_test_log, pred_tst_mlp)
 
-    joblib.dump(xgb, res / "model_xgb.joblib")
-    metrics_rows.append({"Model": "XGBoost", "Split": "valid", **m_val})
-    metrics_rows.append({"Model": "XGBoost", "Split": "test",  **m_tst})
-
-    if feature_names:
-        save_feature_importance(xgb, feature_names, res / "feature_importance_xgb.csv")
+    joblib.dump(mlp, res / "model_mlp.joblib")
+    metrics_rows.append({"Model": "MLPRegressor", "Split": "valid", **m_val})
+    metrics_rows.append({"Model": "MLPRegressor", "Split": "test",  **m_tst})
 
     # ======================================================
-    # Optional: Hyperparameter Tuning (RF & XGB)
+    # Optional: Hyperparameter Tuning
     # ======================================================
     if args.tune:
-        print(">>> Tuning RandomForest and XGBoost with RandomizedSearchCV...")
+        print(">>> Running RandomizedSearchCV for RandomForest and MLP...")
+
         cv = KFold(n_splits=args.cv_splits, shuffle=True, random_state=args.random_state)
 
-        # ----- Random Forest search
-        rf_base = RandomForestRegressor(random_state=args.random_state, n_jobs=args.n_jobs)
-        rf_space = {
-            "n_estimators": [200, 400, 600, 800, 1000],
-            "max_depth": [None, 8, 12, 16, 24],
+        # ---- Random Forest tuning
+        rf_param_grid = {
+            "n_estimators": [200, 400, 600, 800],
+            "max_depth": [None, 10, 15, 20],
             "min_samples_split": [2, 5, 10],
             "min_samples_leaf": [1, 2, 4],
-            "max_features": ["sqrt", "log2", 0.5, 0.7, None],
-            "bootstrap": [True, False],
+            "max_features": ["sqrt", "log2", 0.5, None],
         }
+
         rf_search = RandomizedSearchCV(
-            estimator=rf_base,
-            param_distributions=rf_space,
+            rf,
+            rf_param_grid,
             n_iter=args.n_iter,
             scoring="neg_root_mean_squared_error",
             cv=cv,
-            random_state=args.random_state,
             n_jobs=args.n_jobs,
+            random_state=args.random_state,
             verbose=1,
         )
+
         rf_search.fit(to_dense_if_needed(X_train, "rf"), y_train_log)
         rf_best = rf_search.best_estimator_
 
-        # Evaluate on valid
-        pred_val_rf_tuned = rf_best.predict(to_dense_if_needed(X_valid, "rf"))
-        m_val_rf_tuned = eval_regression(y_valid_log, pred_val_rf_tuned)
-        metrics_rows.append({"Model": "RandomForest_TUNED", "Split": "valid", **m_val_rf_tuned})
-
-        # Refit on train+valid, test
-        X_trv = to_dense_if_needed(sparse.vstack([X_train, X_valid]) if sparse.issparse(X_train) else np.vstack([X_train, X_valid]), "rf")
-        y_trv = np.concatenate([y_train_log, y_valid_log])
-        rf_best.fit(X_trv, y_trv)
         pred_tst_rf_tuned = rf_best.predict(to_dense_if_needed(X_test, "rf"))
         m_tst_rf_tuned = eval_regression(y_test_log, pred_tst_rf_tuned)
         metrics_rows.append({"Model": "RandomForest_TUNED", "Split": "test", **m_tst_rf_tuned})
         joblib.dump(rf_best, res / "model_rf_tuned.joblib")
 
-        # ----- XGBoost search
-        xgb_base = XGBRegressor(
-            objective="reg:squarederror",
-            n_jobs=args.n_jobs,
-            random_state=args.random_state,
-            tree_method="hist",
-        )
-        xgb_space = {
-            "n_estimators": [400, 600, 800, 1000, 1200],
-            "learning_rate": np.linspace(0.02, 0.2, 10),
-            "max_depth": [3, 4, 5, 6, 8, 10],
-            "subsample": np.linspace(0.6, 1.0, 5),
-            "colsample_bytree": np.linspace(0.6, 1.0, 5),
-            "reg_alpha": [0.0, 0.01, 0.1, 0.5, 1.0],
-            "reg_lambda": [0.5, 1.0, 2.0, 5.0, 10.0],
+        # ---- MLP tuning
+        mlp_param_grid = {
+            "hidden_layer_sizes": [(64, 32), (128, 64, 32), (256, 128)],
+            "alpha": [0.0001, 0.001, 0.01],
+            "learning_rate_init": [0.001, 0.01],
         }
-        xgb_search = RandomizedSearchCV(
-            estimator=xgb_base,
-            param_distributions=xgb_space,
+
+        mlp_search = RandomizedSearchCV(
+            mlp,
+            mlp_param_grid,
             n_iter=args.n_iter,
             scoring="neg_root_mean_squared_error",
             cv=cv,
-            random_state=args.random_state,
             n_jobs=args.n_jobs,
+            random_state=args.random_state,
             verbose=1,
         )
-        xgb_search.fit(X_train, y_train_log)
-        xgb_best = xgb_search.best_estimator_
 
-        # Evaluate on valid
-        pred_val_xgb_tuned = xgb_best.predict(X_valid)
-        m_val_xgb_tuned = eval_regression(y_valid_log, pred_val_xgb_tuned)
-        metrics_rows.append({"Model": "XGBoost_TUNED", "Split": "valid", **m_val_xgb_tuned})
+        mlp_search.fit(to_dense_if_needed(X_train, "mlp"), y_train_log)
+        mlp_best = mlp_search.best_estimator_
 
-        # Refit on train+valid with early-stopping using a small valid fold from train+valid (optional)
-        X_trv = sparse.vstack([X_train, X_valid]) if sparse.issparse(X_train) else np.vstack([X_train, X_valid])
-        y_trv = np.concatenate([y_train_log, y_valid_log])
-        xgb_best.fit(
-            X_trv,
-            y_trv,
-            eval_set=[(X_valid, y_valid_log)],
-            eval_metric="rmse",
-            early_stopping_rounds=50,
-            verbose=False,
-        )
-        pred_tst_xgb_tuned = xgb_best.predict(X_test)
-        m_tst_xgb_tuned = eval_regression(y_test_log, pred_tst_xgb_tuned)
-        metrics_rows.append({"Model": "XGBoost_TUNED", "Split": "test", **m_tst_xgb_tuned})
-        joblib.dump(xgb_best, res / "model_xgb_tuned.joblib")
+        pred_tst_mlp_tuned = mlp_best.predict(to_dense_if_needed(X_test, "mlp"))
+        m_tst_mlp_tuned = eval_regression(y_test_log, pred_tst_mlp_tuned)
+        metrics_rows.append({"Model": "MLPRegressor_TUNED", "Split": "test", **m_tst_mlp_tuned})
+        joblib.dump(mlp_best, res / "model_mlp_tuned.joblib")
 
-    # ---- Save metrics table
+    # -----------------------
+    # Save metrics
+    # -----------------------
     df_metrics = pd.DataFrame(metrics_rows)
     df_metrics.to_csv(res / "metrics_comparison.csv", index=False)
 
-    # tiny printout
-    print("\n=== Metrics (head) ===")
-    print(df_metrics.head(10))
-    print(f"\nSaved metrics to {res / 'metrics_comparison.csv'}")
+    print("\n=== Model Performance Summary ===")
+    print(df_metrics)
+    print(f"\nMetrics saved to {res / 'metrics_comparison.csv'}")
     print("Done.")
 
 

@@ -250,9 +250,14 @@ def main():
     # 6️⃣ Save processed artifacts
     # --------------------
     def save_matrix(path, mat):
+        base, ext = os.path.splitext(path)
         if sparse.issparse(mat):
+            if ext != ".npz":
+                path = base + ".npz"
             sparse.save_npz(path, mat.tocsr())
         else:
+            if ext != ".npy":
+                path = base + ".npy"
             np.save(path, mat)
 
     # Save feature matrices
