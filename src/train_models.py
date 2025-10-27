@@ -100,6 +100,16 @@ def main():
     rf.fit(X_train, y_train_log)
     joblib.dump(rf, res / "model_rf.joblib")
 
+    if hasattr(rf, "feature_importances_"):
+        fi = rf.feature_importances_
+        # ensure lengths match before saving
+        if len(fi) == len(feature_names):
+            pd.DataFrame({"feature": feature_names, "importance": fi}) \
+            .to_csv(res / "feature_importance_rf.csv", index=False)
+            print("Saved feature_importance_rf.csv")
+        else:
+            print(f"[warn] feature names ({len(feature_names)}) vs importances ({len(fi)}) length mismatch; skipping CSV.")
+
     # Evaluate baseline RF
     pred_val_rf = rf.predict(X_valid)
     pred_test_rf = rf.predict(X_test)
@@ -140,6 +150,15 @@ def main():
         rf_search.fit(to_dense_if_needed(X_train, "rf"), y_train_log)
         rf_best = rf_search.best_estimator_
         joblib.dump(rf_best, res / "model_rf_tuned.joblib")
+
+        if hasattr(rf_best, "feature_importances_"):
+            fi = rf_best.feature_importances_
+            if len(fi) == len(feature_names):
+                pd.DataFrame({"feature": feature_names, "importance": fi}) \
+                .to_csv(res / "feature_importance_rf_tuned.csv", index=False)
+                print("Saved feature_importance_rf_tuned.csv")
+            else:
+                print(f"[warn] feature names ({len(feature_names)}) vs importances ({len(fi)}) length mismatch; skipping tuned CSV.")
 
         print("\nBest parameters for RandomForest:")
         print(rf_search.best_params_)

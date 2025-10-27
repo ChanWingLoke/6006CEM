@@ -1,10 +1,10 @@
 {
   "best_params": {
-    "n_estimators": 600,
-    "min_samples_split": 10,
+    "n_estimators": 800,
+    "min_samples_split": 5,
     "min_samples_leaf": 1,
     "max_features": 0.5,
-    "max_depth": null
+    "max_depth": 15
   },
-  "cv_best_score_neg_rmse": -0.1331700864396851
+  "cv_best_score_neg_rmse": -0.1316749064649703
 }

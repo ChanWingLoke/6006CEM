@@ -5,7 +5,7 @@
       64,
       32
     ],
-    "alpha": 0.0001
+    "alpha": 0.01
   },
-  "cv_best_score_neg_rmse": -0.1360282847985438
+  "cv_best_score_neg_rmse": -0.13189574344584903
 }
