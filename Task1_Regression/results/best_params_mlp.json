@@ -1,0 +1,11 @@
+{
+  "best_params": {
+    "learning_rate_init": 0.001,
+    "hidden_layer_sizes": [
+      64,
+      32
+    ],
+    "alpha": 0.01
+  },
+  "cv_best_score_neg_rmse": -0.13811952341696246
+}
