@@ -31,7 +31,6 @@ def build_keras_model(input_dim: int, hidden_units=64, dropout=0.2, lr=1e-3):
     return model
 
 def get_keras_classifier(input_dim: int):
-    # scikeras wrapper integrates with sklearn GridSearchCV
     clf = KerasClassifier(
         model=build_keras_model,
         input_dim=input_dim,
