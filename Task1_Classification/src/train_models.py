@@ -53,7 +53,7 @@ def run_pipeline(data_path: str, balance: str = "smote", tune: bool = False, ran
     # Evaluate RF
     rf_pred = rf_best.predict(X_test)
     try:
-        rf_proba = rf_best.predict_proba(X_test)[:,1]
+        rf_proba = rf_best.predict_proba(X_test)[:, 1]
     except Exception:
         rf_proba = None
     rf_metrics = evaluate_binary(y_test, rf_pred, rf_proba)
@@ -61,9 +61,19 @@ def run_pipeline(data_path: str, balance: str = "smote", tune: bool = False, ran
 
     # Save RF metrics & plots
     save_metrics(rf_metrics, os.path.join(RESULTS_DIR, "metrics", "random_forest_metrics.json"))
-    plot_confusion_matrix(y_test, rf_pred, os.path.join(RESULTS_DIR, "confusion_matrices", "rf_confusion.png"), "RF Confusion Matrix")
+    plot_confusion_matrix(
+        y_test,
+        rf_pred,
+        os.path.join(RESULTS_DIR, "confusion_matrices", "rf_confusion.png"),
+        "RF Confusion Matrix",
+    )
     if rf_proba is not None:
-        plot_roc(y_test, rf_proba, os.path.join(RESULTS_DIR, "confusion_matrices", "rf_roc.png"), "RF ROC")
+        plot_roc(
+            y_test,
+            rf_proba,
+            os.path.join(RESULTS_DIR, "confusion_matrices", "rf_roc.png"),
+            "RF ROC",
+        )
 
     # ===== Neural Network (Keras via scikeras) =====
     # For NN we may use SMOTE or class weights
@@ -106,7 +116,7 @@ def run_pipeline(data_path: str, balance: str = "smote", tune: bool = False, ran
     nn_pred = nn_best.predict(X_test_trans)
     # scikeras returns class predictions; try to also get probabilities
     try:
-        nn_proba = nn_best.predict_proba(X_test_trans)[:,1]
+        nn_proba = nn_best.predict_proba(X_test_trans)[:, 1]
     except Exception:
         nn_proba = None
 
@@ -114,9 +124,19 @@ def run_pipeline(data_path: str, balance: str = "smote", tune: bool = False, ran
     print("Neural Net metrics:", nn_metrics)
 
     save_metrics(nn_metrics, os.path.join(RESULTS_DIR, "metrics", "neural_net_metrics.json"))
-    plot_confusion_matrix(y_test, nn_pred, os.path.join(RESULTS_DIR, "confusion_matrices", "nn_confusion.png"), "NN Confusion Matrix")
+    plot_confusion_matrix(
+        y_test,
+        nn_pred,
+        os.path.join(RESULTS_DIR, "confusion_matrices", "nn_confusion.png"),
+        "NN Confusion Matrix",
+    )
     if nn_proba is not None:
-        plot_roc(y_test, nn_proba, os.path.join(RESULTS_DIR, "confusion_matrices", "nn_roc.png"), "NN ROC")
+        plot_roc(
+            y_test,
+            nn_proba,
+            os.path.join(RESULTS_DIR, "confusion_matrices", "nn_roc.png"),
+            "NN ROC",
+        )
 
     # Summary
     summary = {"random_forest": rf_metrics, "neural_network": nn_metrics}

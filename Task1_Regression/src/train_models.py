@@ -218,7 +218,10 @@ def main():
         }
 
         # Random Forest Tuning
-        rf_search = RandomizedSearchCV(rf, rf_param_grid, n_iter=args.n_iter, scoring="neg_root_mean_squared_error", cv=args.cv_splits, n_jobs=args.n_jobs, random_state=args.random_state, verbose=1)
+        rf_search = RandomizedSearchCV(rf, rf_param_grid, n_iter=args.n_iter, 
+                                       scoring="neg_root_mean_squared_error", cv=args.cv_splits, 
+                                       n_jobs=args.n_jobs, random_state=args.random_state, 
+                                       verbose=1)
         rf_search.fit(to_dense_if_needed(X_train, "rf"), y_train_log)
         rf_best = rf_search.best_estimator_
         joblib.dump(rf_best, res / "model_rf_tuned.joblib")
@@ -238,7 +241,10 @@ def main():
             json.dump({"best_params": rf_search.best_params_, "cv_best_score_neg_rmse": float(rf_search.best_score_)}, f, indent=2)
 
         # MLP Tuning
-        mlp_search = RandomizedSearchCV(mlp, mlp_param_grid, n_iter=args.n_iter, scoring="neg_root_mean_squared_error", cv=args.cv_splits, n_jobs=args.n_jobs, random_state=args.random_state, verbose=1)
+        mlp_search = RandomizedSearchCV(mlp, mlp_param_grid, n_iter=args.n_iter, 
+                                        scoring="neg_root_mean_squared_error", cv=args.cv_splits, 
+                                        n_jobs=args.n_jobs, random_state=args.random_state, 
+                                        verbose=1)
         mlp_search.fit(to_dense_if_needed(X_train, "mlp"), y_train_log)
         mlp_best = mlp_search.best_estimator_
         joblib.dump(mlp_best, res / "model_mlp_tuned.joblib")
